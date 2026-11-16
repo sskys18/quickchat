@@ -38,7 +38,7 @@ final class OverlayController {
     }
 
     /// Closes the tab QuickChat created, including one that is still being created. Called when the launcher quits.
-    /// A tab Brave does not confirm closed stays on record and is closed on the next start.
+    /// A window Brave does not confirm closed is found by its name and closed on the next start.
     func shutdown() async {
         stopped = true
         let creating = preparing
@@ -128,7 +128,7 @@ final class OverlayController {
             self.previousApp = nil
             Task {
                 // The connection can drop while the tab lives on. Only open another once Brave confirms this one
-                // is gone; otherwise it stays on record and is closed before the next tab is created.
+                // is gone; otherwise its named window is closed before the next tab is created.
                 guard await created.close() else { return }
                 // Reload right away while Brave is still there, so the next press does not wait for it.
                 await self.preload(waitingUpTo: 0)

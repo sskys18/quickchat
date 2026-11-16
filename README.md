@@ -4,7 +4,7 @@ Option+Space shows a small floating ChatGPT window, rendered by your own Brave w
 
 ## How it works
 
-- QuickChat opens one ChatGPT tab in its own minimized Brave window and keeps it loaded, so it never sits among your tabs. It only ever acts on that tab, which it identifies by the id Brave returned when the tab was created.
+- QuickChat opens one ChatGPT tab in its own hidden Brave window and keeps it loaded, so it never sits among your tabs. It only ever acts on that tab, which it identifies by the id Brave returned when the tab was created.
 - Showing the overlay moves that page into a Brave always-on-top window (Document Picture-in-Picture). Hiding moves it back. Nothing is reloaded, so opening takes about a tenth of a second.
 - No cookie, password or token leaves Brave. QuickChat writes one cookie, `codex_composer_mode=chat`, so ChatGPT opens in Chat. Other ChatGPT tabs in Brave will also open in Chat on their next load.
 - Thinking effort is set to Instant in QuickChat's tab only. ChatGPT normally saves that choice to your account; QuickChat answers that one request itself, so your other tabs keep their setting.
@@ -30,7 +30,7 @@ QuickChat registers itself as a login item the first time it runs. To stop that,
 
 ## The tab in Brave
 
-QuickChat's ChatGPT tab lives alone in a minimized Brave window (in the Dock and Brave's Window menu), not in your tab strips. Leave that window minimized. Closing it is harmless: QuickChat opens a new one within a few seconds. If ChatGPT is signed out, sign in in that window and press Option+Space again.
+QuickChat's ChatGPT tab lives alone in a hidden Brave window: not in your tab strips, the Dock or Stage Manager (Brave's Window menu still lists it). Closing it is harmless: QuickChat opens a new one within a few seconds. The window is named `QuickChat ChatGPT`; before opening its window, QuickChat closes every Brave window with that name, so windows Brave restores on reopening never pile up. If ChatGPT is signed out, sign in in that window and press Option+Space again.
 
 A fully hidden tab (no window at all) was tried: Brave refuses to open the overlay window from one, so it cannot be used.
 

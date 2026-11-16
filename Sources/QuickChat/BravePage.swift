@@ -7,7 +7,7 @@ struct LauncherError: Error, CustomStringConvertible {
     init(_ description: String) { self.description = description }
 
     static let signInNeeded = LauncherError(
-        "ChatGPT is signed out in Brave. Sign in in the minimized ChatGPT window QuickChat opened in Brave, then press ⌥Space again.")
+        "ChatGPT is signed out in Brave. Sign in at chatgpt.com in any Brave tab, then press ⌥Space again.")
 }
 
 /// Brave answered and refused the request, as opposed to not answering at all.
@@ -128,32 +128,28 @@ enum BraveEndpoint {
     }
 }
 
-/// Which tab QuickChat owns, kept across launches so a tab left behind by a crash can be closed.
-/// The browser socket identifies the Brave process that issued the tab id; an id from another process is never used.
+/// QuickChat's window in Brave, named so it can be found again. Brave saves a window's name with its session, so a
+/// window that comes back when Brave reopens or restores after a crash still carries it and is closed before a new
+/// one is made. Only windows carrying this exact name are ever closed by name.
 enum OwnedTab {
-    private static let targetKey = "ownedTargetId"
-    private static let browserKey = "ownedBrowserSocket"
+    static let windowName = "QuickChat ChatGPT"
 
-    static func remember(targetId: String, browser: URL) {
-        UserDefaults.standard.set(targetId, forKey: targetKey)
-        UserDefaults.standard.set(browser.absoluteString, forKey: browserKey)
-    }
-
-    static func forget(targetId: String) {
-        guard UserDefaults.standard.string(forKey: targetKey) == targetId else { return }
-        UserDefaults.standard.removeObject(forKey: targetKey)
-        UserDefaults.standard.removeObject(forKey: browserKey)
+    /// Names the window the new tab lives alone in and hides it, so it is in no tab strip, the Dock or Stage
+    /// Manager. Brave ignores minimize requests for this window, but a hidden window still opens the overlay.
+    static func label(targetId: String, on browser: URL) async throws {
+        let windowId = try await windowId(of: targetId, on: browser)
+        try await runBrave("set given name of (every window whose id is \(windowId)) to \"\(windowName)\"")
+        try await runBrave("set visible of (every window whose id is \(windowId)) to false")
     }
 
     /// Closes that exact tab by closing the window it lives alone in. Returns true when it is confirmed closed or
-    /// confirmed not to exist; the record is kept otherwise.
+    /// confirmed not to exist.
     /// Closing the tab itself would make Brave (with "close window with last tab" off) leave a New Tab window behind,
     /// so the window is closed through Brave's scripting interface, which never does that.
     static func close(targetId: String, on browser: URL) async -> Bool {
         do {
-            let window = try await BraveEndpoint.browserCall("Browser.getWindowForTarget", ["targetId": targetId], on: browser)
-            guard let windowId = window["windowId"] as? Int else { throw LauncherError("Brave reported no window for the tab.") }
-            try await closeWindow(windowId)
+            let windowId = try await windowId(of: targetId, on: browser)
+            try await runBrave("close (every window whose id is \(windowId))")
             log("closed tab \(targetId)")
         } catch let rejected as BraveRejected where rejected.description.contains("No target with given id") {
             log("tab \(targetId) no longer exists")
@@ -161,34 +157,31 @@ enum OwnedTab {
             log("could not confirm tab \(targetId) is closed: \(error)")
             return false
         }
-        forget(targetId: targetId)
         return true
+    }
+
+    /// Closes every window QuickChat named: ones Brave restored on reopening and ones a previous QuickChat left.
+    static func closeLeftovers() async throws {
+        try await runBrave("close (every window whose given name is \"\(windowName)\")")
+    }
+
+    private static func windowId(of targetId: String, on browser: URL) async throws -> Int {
+        let window = try await BraveEndpoint.browserCall("Browser.getWindowForTarget", ["targetId": targetId], on: browser)
+        guard let windowId = window["windowId"] as? Int else { throw LauncherError("Brave reported no window for the tab.") }
+        return windowId
     }
 
     /// Runs in `osascript` rather than in-process: QuickChat closes its window while quitting, inside AppKit's
     /// termination run loop, where an in-process Apple event does not complete.
-    private static func closeWindow(_ windowId: Int) async throws {
+    private static func runBrave(_ command: String) async throws {
         let script = Process()
         script.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        script.arguments = ["-e", "tell application id \"\(BraveEndpoint.bundleId)\" to close (every window whose id is \(windowId))"]
+        script.arguments = ["-e", "tell application id \"\(BraveEndpoint.bundleId)\" to \(command)"]
         let status: Int32 = try await withCheckedThrowingContinuation { done in
             script.terminationHandler = { done.resume(returning: $0.terminationStatus) }
             do { try script.run() } catch { done.resume(throwing: error) }
         }
-        if status != 0 { throw LauncherError("Brave did not close QuickChat's window (osascript status \(status)).") }
-    }
-
-    /// Closes the tab a previous QuickChat left open in this same Brave process. A record from another Brave
-    /// process is dropped without closing anything.
-    static func closeLeftover(on browser: URL) async throws {
-        guard let targetId = UserDefaults.standard.string(forKey: targetKey) else { return }
-        guard UserDefaults.standard.string(forKey: browserKey) == browser.absoluteString else {
-            forget(targetId: targetId)
-            return
-        }
-        guard await close(targetId: targetId, on: browser) else {
-            throw LauncherError("Brave did not confirm that QuickChat's previous ChatGPT tab is closed. Press ⌥Space again.")
-        }
+        if status != 0 { throw LauncherError("Brave did not run \"\(command)\" (osascript status \(status)).") }
     }
 }
 
@@ -210,18 +203,19 @@ final class BravePage {
     /// Called when the page reports that the overlay was hidden.
     var onHidden: ((HideReason) -> Void)?
 
-    /// Creates the tab in its own minimized Brave window, away from the owner's tab strips, and loads ChatGPT in
+    /// Creates the tab in its own hidden Brave window, away from the owner's tab strips, and loads ChatGPT in
     /// it, in Chat mode. A hidden tab would be invisible too, but Brave cannot open the overlay from one.
     static func create() async throws -> BravePage {
         let browser = try await BraveEndpoint.browserSocketURL()
-        try await OwnedTab.closeLeftover(on: browser)
+        try await OwnedTab.closeLeftovers()
         let created = try await BraveEndpoint.browserCall(
             "Target.createTarget",
             ["url": "about:blank", "newWindow": true, "background": true, "windowState": "minimized"], on: browser)
         guard let targetId = created["targetId"] as? String else { throw LauncherError("Brave did not create a tab.") }
-        OwnedTab.remember(targetId: targetId, browser: browser)
         let page: BravePage
         do {
+            // An unnamed window could not be found again after Brave reopens, so it is not kept.
+            try await OwnedTab.label(targetId: targetId, on: browser)
             page = BravePage(targetId: targetId, browser: browser, socketURL: try BraveEndpoint.pageSocketURL(targetId: targetId))
         } catch {
             _ = await OwnedTab.close(targetId: targetId, on: browser)
@@ -355,7 +349,7 @@ final class BravePage {
     }
 
     /// Closes the tab QuickChat created. Returns true when Brave confirmed it is closed or does not exist.
-    /// When it cannot be confirmed, the tab stays on record and is closed the next time a tab is created.
+    /// When it cannot be confirmed, its named window is closed the next time a tab is created.
     func close() async -> Bool {
         closedByLauncher = true
         socket.cancel(with: .normalClosure, reason: nil)
